@@ -1,0 +1,836 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>DeliQ · Social Restaurants (SPA + Cognito PKCE)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    .summary-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    @media (max-width: 860px){.summary-grid{grid-template-columns:1fr}}
+    .kpi{display:flex;flex-direction:column;gap:2px;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--panel-2)}
+    .kpi strong{font-size:20px}
+    .bar-row{display:flex;align-items:center;gap:8px}
+    .bar{flex:1;height:8px;background:var(--line);border-radius:999px;overflow:hidden}
+    .bar>span{display:block;height:100%;background:var(--brand);width:0}
+
+    :root {
+      --bg: #0b1020; --panel: #0f1738; --panel-2:#0e1530; --line:#1e2a55; --muted:#9bb0ff; --txt:#e7ecff;
+      --brand:#3b82f6; --brand-2:#1f2b59; --ok:#22c55e; --warn:#f59e0b; --bad:#ef4444;
+      --chip:#1f2b59; --radius:14px;
+    }
+    *{box-sizing: border-box}
+    html,body{height:100%}
+    body{margin:0;background:var(--bg);color:var(--txt);font-family: system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif;}
+    header{position:sticky;top:0;z-index:50;background:var(--panel-2);border-bottom:1px solid var(--line)}
+    .wrap{max-width:980px;margin:0 auto;padding:12px 16px}
+    .brand{display:flex;align-items:center;gap:10px}
+    .brand h1{font-size:18px;margin:0}
+    .muted{color:var(--muted)}
+    .nav{display:flex;gap:8px;flex-wrap:wrap}
+    .nav a{padding:8px 12px;border-radius:10px;text-decoration:none;color:var(--txt);border:1px solid var(--line);background:transparent}
+    .nav a.active{background:var(--brand);border-color:transparent}
+
+    main{padding:18px 0}
+    .grid{display:grid;grid-template-columns: 260px 1fr; gap:16px}
+    @media (max-width: 860px){.grid{grid-template-columns:1fr}}
+
+    .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+    .panel{background:var(--panel-2);border:1px solid var(--line);border-radius:var(--radius);padding:14px}
+    .row{display:flex;gap:10px;flex-wrap:wrap}
+    .col{display:flex;flex-direction:column;gap:10px}
+    .sep{height:1px;background:var(--line);margin:12px 0}
+
+    button, .btn{background:var(--brand);color:#fff;border:none;border-radius:10px;padding:10px 14px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:8px;text-decoration:none}
+    .btn.secondary{background:var(--brand-2)}
+    .btn.ghost{background:transparent;border:1px solid var(--line);color:var(--txt)}
+    .btn.bad{background:var(--bad)}
+    input,textarea,select{width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:#0c1430;color:var(--txt)}
+    label.small{font-size:12px;color:var(--muted)}
+
+    .pill{padding:3px 8px;border-radius:999px;background:var(--chip);display:inline-flex;align-items:center;gap:6px}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+    .tiny{font-size:12px;opacity:.95}
+
+    .feed-card{display:grid;grid-template-columns:56px 1fr;gap:12px}
+    .avatar{width:56px;height:56px;border-radius:50%;background:#16214a;border:1px solid var(--line);object-fit:cover}
+    .feed-head{display:flex;align-items:center;gap:8px}
+    .actions{display:flex;gap:8px;align-items:center}
+
+    .tabs{display:flex;gap:8px;margin:8px 0}
+    .tabs button{background:transparent;border:1px solid var(--line);color:var(--txt)}
+    .tabs button.active{background:var(--brand);border-color:transparent}
+
+    .map-box{height:320px;border-radius:12px;overflow:hidden}
+
+    .empty{color:var(--muted);text-align:center;padding:16px}
+
+    footer{padding:16px;background:var(--panel-2);border-top:1px solid var(--line)}
+  </style>
+</head>
+<body>
+<header>
+  <div class="wrap" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+    <div class="brand">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none"><path d="M3 6h18M3 12h18M3 18h18" stroke="#9bb0ff" stroke-width="1.4" stroke-linecap="round"/></svg>
+      <h1>DeliQ · Social Restaurants</h1>
+      <span id="auth-chip" class="pill tiny" title="Estado de sesión">detectando…</span>
+    </div>
+    <nav class="nav">
+      <a href="#/feed" id="nav-feed" class="active">Feed</a>
+      <a href="#/explore" id="nav-explore">Explorar mapa</a>
+      <a href="#/create" id="nav-create">Crear</a>
+      <a href="#/profile" id="nav-profile">Perfil</a>
+      <button id="btn-login" class="btn" style="display:none">Iniciar sesión</button>
+      <a id="btn-signup" class="btn secondary" href="#" style="display:none">Crear cuenta</a>
+      <button id="btn-logout" class="btn ghost" style="display:none">Salir</button>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="grid">
+    <!-- Left column: quick composer + filters -->
+    <aside class="col">
+        <div class="card" id="composer" style="display:none">
+            <div class="tiny muted" style="margin-bottom:6px">Crea un restaurante (publicación)</div>
+            <input id="c-name" placeholder="Nombre del restaurante" />
+            <textarea id="c-desc" rows="3" placeholder="Descripción" ></textarea>
+
+            <div class="row">
+                <label class="small" style="flex:1">Ciudad
+                <input id="c-city" placeholder="Ej: Medellín" />
+                </label>
+                <label class="small" style="flex:1">Cocina
+                <select id="c-cuisine">
+                    <option value="colombiana">colombiana</option>
+                    <option value="americana">americana</option>
+                    <option value="china">china</option>
+                    <option value="francesa">francesa</option>
+                    <option value="india">india</option>
+                    <option value="italiana">italiana</option>
+                    <option value="japonesa">japonesa</option>
+                    <option value="mediterranea">mediterranea</option>
+                    <option value="mexicana">mexicana</option>
+                    <option value="peruana">peruana</option>
+                    <option value="vegana">vegana</option>
+                    <option value="vegetariana">vegetariana</option>
+                </select>
+                </label>
+            </div>
+
+            <div class="row">
+                <input id="c-lat" type="number" step="0.000001" placeholder="Lat" />
+                <input id="c-lng" type="number" step="0.000001" placeholder="Lng" />
+            </div>
+
+            <div id="mini-map" class="map-box"></div>
+            <div class="row" style="justify-content: space-between">
+                <div class="tiny muted">Consejo: haz clic en el mapa para fijar coordenadas.</div>
+                <button id="btn-quick-create" class="btn">Publicar</button>
+            </div>
+            <div id="composer-status" class="tiny muted"></div>
+        </div>
+
+      <div class="panel">
+        <div class="tiny muted" style="margin-bottom:6px">Buscar / ordenar</div>
+        <input id="q" placeholder="Buscar restaurantes…" />
+        <div class="row">
+          <select id="sort">
+            <option value="best">Mejor calificados (7d)</option>
+             <option value="recent">Más recientes</option>
+              <option value="most_reviewed">Con más reseñas (7d)</option>
+          </select>
+          <button id="btn-search" class="btn ghost">Buscar</button>
+        </div>
+      </div>
+
+      <div class="panel" id="following-box" style="display:none">
+        <div class="tiny muted" style="margin-bottom:6px">Siguiendo</div>
+        <div id="following-list" class="col"></div>
+      </div>
+    </aside>
+
+    <!-- Right column: router views -->
+    <section class="col">
+      <!-- FEED VIEW -->
+      <div id="view-feed" class="col">
+        <div id="summary-card" class="card" style="display:none"></div>
+        <!-- RECOMMENDATIONS CARD -->
+        <div id="recommend-card" class="card">
+          <div class="row" style="justify-content:space-between;align-items:center">
+            <h3 style="margin:0">Recomendaciones para ti</h3>
+            <div class="row" style="gap:8px;align-items:center">
+              <span class="tiny muted">Top K:</span>
+              <select id="rec-k" style="width:auto">
+                <option value="3" selected>3</option>
+                <option value="5">5</option>
+                <option value="10">10</option>
+              </select>
+              <button id="btn-recommend" class="btn">Ver recomendaciones</button>
+            </div>
+          </div>
+          <div id="rec-status" class="tiny muted" style="margin-top:6px"></div>
+          <div id="rec-list" class="col" style="margin-top:8px"></div>
+        </div>
+        <div id="feed"></div>
+        <div id="feed-more" class="row" style="justify-content:center;display:none">
+          <button id="btn-more" class="btn ghost">Cargar más</button>
+        </div>
+      </div>
+
+      <!-- EXPLORE VIEW -->
+      <div id="view-explore" class="col" style="display:none">
+        <div class="card">
+          <div id="map" class="map-box"></div>
+        </div>
+        <div id="explore-list" class="col"></div>
+      </div>
+
+      <!-- CREATE VIEW (full form) -->
+      <div id="view-create" class="col" style="display:none">
+        <div class="card">
+          <h3>➕ Crear restaurante</h3>
+          <input id="rest-name" placeholder="Nombre del restaurante" style="margin-top:6px">
+          <textarea id="rest-desc" placeholder="Descripción" style="height:70px;margin-top:6px"></textarea>
+          <div class="row">
+            <label class="small">Lat <input id="lat" type="number" step="0.000001"></label>
+            <label class="small">Lng <input id="lng" type="number" step="0.000001"></label>
+          </div>
+          <div class="row" style="margin-top:6px">
+            <label class="small" style="flex:1">Ciudad
+                <input id="city" placeholder="Ej: Medellín">
+            </label>
+            <label class="small" style="flex:1">Cocina
+                <select id="cuisine">
+                <option value="colombiana">colombiana</option>
+                <option value="americana">americana</option>
+                <option value="china">china</option>
+                <option value="francesa">francesa</option>
+                <option value="india">india</option>
+                <option value="italiana">italiana</option>
+                <option value="japonesa">japonesa</option>
+                <option value="mediterranea">mediterranea</option>
+                <option value="mexicana">mexicana</option>
+                <option value="peruana">peruana</option>
+                <option value="vegana">vegana</option>
+                <option value="vegetariana">vegetariana</option>
+                </select>
+            </label>
+          </div>
+          <div id="create-map" class="map-box" style="margin:8px 0"></div>
+          <div class="row">
+            <input type="file" id="file-input" accept="image/*" />
+            <button id="btn-upload" class="btn ghost">Subir portada</button>
+          </div>
+          <img id="preview" style="margin-top:8px;max-width:100%;border-radius:10px;display:none">
+          <div class="row" style="margin-top:8px">
+            <button id="btn-create-restaurant" class="btn">Crear</button>
+            <span id="rest-create-status" class="tiny muted"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- PROFILE VIEW -->
+      <div id="view-profile" class="col" style="display:none">
+        <div class="card">
+          <div class="row" style="align-items:center">
+            <img id="me-avatar" class="avatar" alt="avatar" />
+            <div>
+              <div id="user-email" style="font-weight:700"></div>
+              <div class="tiny mono" id="user-sub"></div>
+              <div class="row" style="margin-top:6px">
+                <span id="role-chip" class="pill tiny">user</span>
+                <button id="btn-set-avatar" class="btn ghost">Cambiar avatar</button>
+                <input id="avatar-file" type="file" accept="image/*" style="display:none" />
+              </div>
+            </div>
+          </div>
+          <div class="sep"></div>
+          <div class="row">
+            <div><span class="mono">Likes:</span> <span id="stat-likes" class="pill tiny">0</span></div>
+            <div><span class="mono">Siguiendo:</span> <span id="stat-following" class="pill tiny">0</span></div>
+          </div>
+        </div>
+        <div class="col" id="my-content"></div>
+      </div>
+
+      <!-- DETAIL VIEW -->
+      <div id="view-detail" class="col" style="display:none"></div>
+    </section>
+  </div>
+</main>
+
+<footer>
+  <div class="wrap tiny muted">Demo educativa estilo red social. No guardes secretos en el front. Sugerido: CloudFront + HTTPS + dominio propio en producción.</div>
+</footer>
+
+<script>
+/**************** CONFIG ****************/
+const COGNITO = {
+  region: "us-east-2",
+  userPoolDomain: "us-east-2rdqijec2l.auth.us-east-2.amazoncognito.com",
+  clientId: "45go98roc58lptsaeejoubj50k",
+  redirectUri: "http://localhost:3000/",
+  logoutUri:   "http://localhost:3000/",
+  scopes: ["openid","email","profile"]
+};
+const API_BASE = "https://01mli3trs0.execute-api.us-east-2.amazonaws.com";
+
+/*************** STORAGE KEYS ***************/
+const LS = {
+  CODE_VERIFIER: "pkce_code_verifier",
+  STATE: "oauth_state",
+  TOKENS: "cognito_tokens",
+  LIKES: "likes",                 // { restaurant: Set<string>, review: Set<string> }
+  FOLLOWS: "follows",             // Set<string> of restaurant ids
+  AVATAR: "me_avatar",            // string URL
+  MY_RESTS: "my_restaurants_cache", // array of created at session
+  MY_REVIEWS: "my_reviews_cache"     // array of created at session
+};
+
+/*************** UTIL ***************/
+function b64url(buf){return btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}
+function strToUint8(str){return new TextEncoder().encode(str)}
+function randString(len=64){const chars="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";let s="";const arr=new Uint32Array(len);crypto.getRandomValues(arr);for(let i=0;i<len;i++) s+=chars[arr[i]%chars.length];return s}
+async function sha256Base64Url(str){const data=strToUint8(str);const digest=await crypto.subtle.digest("SHA-256",data);return b64url(digest)}
+function decodeJwt(token){const [,payload]=token.split(".");const json=atob(payload.replace(/-/g,"+").replace(/_/g,"/"));return JSON.parse(decodeURIComponent(escape(json)))}
+function authHeader(){const t=getTokens();return t?.access_token?{"Authorization":`Bearer ${t.access_token}`}:{}}
+function getTokens(){const v=localStorage.getItem(LS.TOKENS);return v?JSON.parse(v):null}
+function saveTokens(t){localStorage.setItem(LS.TOKENS,JSON.stringify(t))}
+function clearTokens(){localStorage.removeItem(LS.TOKENS)}
+function clearOauthTemp(){localStorage.removeItem(LS.CODE_VERIFIER);localStorage.removeItem(LS.STATE)}
+function loadSet(key){try{const v=JSON.parse(localStorage.getItem(key)||"[]");return new Set(v)}catch{return new Set()}}
+function saveSet(key,set){localStorage.setItem(key,JSON.stringify(Array.from(set)))}
+function timeAgo(ts){const d=Math.floor((Date.now()-ts)/1000);if(d<60) return `${d}s`; if(d<3600) return `${Math.floor(d/60)}m`; if(d<86400) return `${Math.floor(d/3600)}h`; return `${Math.floor(d/86400)}d`}
+
+/*************** OAUTH ***************/
+function buildAuthorizeUrl({state,codeChallenge}){
+  const u=new URL(`https://${COGNITO.userPoolDomain}/oauth2/authorize`);
+  u.searchParams.set("response_type","code");
+  u.searchParams.set("client_id",COGNITO.clientId);
+  u.searchParams.set("redirect_uri",COGNITO.redirectUri);
+  u.searchParams.set("scope",COGNITO.scopes.join(" "));
+  u.searchParams.set("state",state);
+  u.searchParams.set("code_challenge",codeChallenge);
+  u.searchParams.set("code_challenge_method","S256");
+  return u.toString();
+}
+function buildSignupUrl(authUrl){return authUrl.replace("/authorize","/signup")}
+async function startLogin(signup=false){const state=randString(24);const codeVerifier=randString(64);const codeChallenge=await sha256Base64Url(codeVerifier);localStorage.setItem(LS.STATE,state);localStorage.setItem(LS.CODE_VERIFIER,codeVerifier);const authUrl=buildAuthorizeUrl({state,codeChallenge});window.location.href= signup?buildSignupUrl(authUrl):authUrl}
+async function handleCallbackIfAny(){const url=new URL(window.location.href);const code=url.searchParams.get("code");const state=url.searchParams.get("state");if(!code) return false;const expected=localStorage.getItem(LS.STATE);if(!state||state!==expected){alert("⚠️ State inválido.");return true}const tokenUrl=`https://${COGNITO.userPoolDomain}/oauth2/token`;const body=new URLSearchParams({grant_type:"authorization_code",client_id:COGNITO.clientId,redirect_uri:COGNITO.redirectUri,code_verifier:localStorage.getItem(LS.CODE_VERIFIER),code});const resp=await fetch(tokenUrl,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:body.toString()});if(!resp.ok){console.error("Token exchange failed",await resp.text());alert("No se pudo canjear el código.");return true}const tokens=await resp.json();saveTokens({...tokens,obtained_at:Date.now()});clearOauthTemp();url.searchParams.delete("code");url.searchParams.delete("state");history.replaceState({},document.title,url.pathname);return true}
+async function logout(){clearTokens();clearOauthTemp();const u=new URL(`https://${COGNITO.userPoolDomain}/logout`);u.searchParams.set("client_id",COGNITO.clientId);u.searchParams.set("logout_uri",COGNITO.logoutUri);window.location.href=u.toString()}
+
+/*************** API ***************/
+/*************** RECOMMENDATIONS ***************/
+async function fetchRecommendationsByUser(userSub, k = 3) {
+  const u = new URL(API_BASE + "/restaurants/recommend");
+  u.searchParams.set("user_sub", userSub);
+  u.searchParams.set("k", String(k));
+  const r = await fetch(u.toString());
+  const j = await r.json();
+  if (!r.ok || j.ok === false) {
+    throw new Error(j.error || "Error obteniendo recomendaciones");
+  }
+  return j;
+}
+
+function renderRecommendations(payload) {
+  const list = document.getElementById("rec-list");
+  const status = document.getElementById("rec-status");
+  list.innerHTML = "";
+
+  const recs = (payload.recommendations || [])
+    .slice()
+    .sort((a, b) => (b.score || 0) - (a.score || 0)); // asegurar orden por score desc
+
+  if (!recs.length) {
+    list.innerHTML = `<div class="empty">Sin recomendaciones por ahora.</div>`;
+    status.textContent = "No hay sugerencias basadas en tus reseñas aún.";
+    return;
+  }
+
+  status.textContent = `Basado en: ${payload.item}`;
+  recs.forEach(r => {
+    const row = document.createElement("div");
+    row.className = "row";
+    row.style.justifyContent = "space-between";
+    row.innerHTML = `
+      <div><strong>${r.name}</strong></div>
+      <span class="pill tiny mono">score ${Number(r.score).toFixed(3)}</span>
+    `;
+    list.appendChild(row);
+  });
+}
+
+
+async function fetchRestaurants({search="",sort="best",page=1,limit=10}={}){const u=new URL(API_BASE+"/restaurants");if(search)u.searchParams.set("search",search);u.searchParams.set("sort",sort);u.searchParams.set("page",page);u.searchParams.set("limit",limit);const r=await fetch(u);const j=await r.json();if(!r.ok||!j.success) throw new Error(j.error?.message||"Error listado");return j}
+async function fetchRestaurant(id){const r=await fetch(API_BASE+`/restaurants/${id}`);const j=await r.json();if(!r.ok||!j.success) throw new Error(j.error?.message||"Error detalle");return j.data}
+async function fetchReviews(restId,page=1,limit=10){const u=new URL(API_BASE+`/restaurants/${restId}/reviews`);u.searchParams.set("page",page);u.searchParams.set("limit",limit);const r=await fetch(u);const j=await r.json();if(!r.ok||!j.success) throw new Error(j.error?.message||"Error reviews");return j.data||[]}
+async function createRestaurant(payload){const r=await fetch(API_BASE+`/restaurants`,{method:"POST",headers:{"Content-Type":"application/json",...authHeader()},body:JSON.stringify(payload)});const j=await r.json();if(!r.ok||!j.success) throw new Error(j.error?.message||"Error creando restaurante");return j.data}
+async function createReview(restId,{rating,title,comment,images=[]}){const r=await fetch(API_BASE+`/restaurants/${restId}/reviews`,{method:"POST",headers:{"Content-Type":"application/json",...authHeader()},body:JSON.stringify({rating,title,comment,images})});const j=await r.json();if(!r.ok||!j.success) throw new Error(j.error?.message||"Error creando review");return j.data}
+
+async function uploadImage(file, folder="reviews") {
+  const tokens = getTokens();
+  const access = tokens?.access_token;
+
+  const presignRes = await fetch(API_BASE + "/uploads/presign", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${access}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      folder,
+      contentType: file.type,
+    }),
+  });
+
+  const { success, url, key } = await presignRes.json();
+  if (!success) throw new Error("No se pudo generar URL");
+
+  const putRes = await fetch(url, {
+    method: "PUT",
+    headers: { "Content-Type": file.type },
+    body: file,
+  });
+  if (!putRes.ok) throw new Error("PUT a S3 falló");
+
+  return `https://deliq-media-jdjv-us-east-2.s3.us-east-2.amazonaws.com/${key}`;
+}
+
+/*************** MAPS ***************/
+let map, createMap, miniMap, marker, createMarker, miniMarker;
+function initExploreMap(){map=L.map('map').setView([6.2442,-75.5812],13);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'&copy; OpenStreetMap'}).addTo(map)}
+function initCreateMap(){createMap=L.map('create-map').setView([6.2442,-75.5812],13);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'&copy; OpenStreetMap'}).addTo(createMap);createMap.on('click',e=>{const {lat,lng}=e.latlng;if(createMarker) createMarker.setLatLng([lat,lng]); else createMarker=L.marker([lat,lng]).addTo(createMap);document.querySelector('#lat').value=lat.toFixed(6);document.querySelector('#lng').value=lng.toFixed(6)});if(navigator.geolocation){navigator.geolocation.getCurrentPosition(pos=>{const {latitude,longitude}=pos.coords;createMap.setView([latitude,longitude],14)})}}
+function initMiniMap(){miniMap=L.map('mini-map').setView([6.2442,-75.5812],12);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'&copy; OpenStreetMap'}).addTo(miniMap);miniMap.on('click',e=>{const {lat,lng}=e.latlng;if(miniMarker) miniMarker.setLatLng([lat,lng]); else miniMarker=L.marker([lat,lng]).addTo(miniMap);document.querySelector('#c-lat').value=lat.toFixed(6);document.querySelector('#c-lng').value=lng.toFixed(6)})}
+
+/*************** SOCIAL (client-side) ***************/
+const likes = loadSet(LS.LIKES); // holds ids as `r:{id}` or `v:{id}`
+const follows = loadSet(LS.FOLLOWS); // restaurant ids
+function toggleLike(key){ if(likes.has(key)) likes.delete(key); else likes.add(key); saveSet(LS.LIKES,likes); updateStats(); }
+function toggleFollow(restId){ if(follows.has(restId)) follows.delete(restId); else follows.add(restId); saveSet(LS.FOLLOWS,follows); renderFollowingBox(); updateStats(); }
+function updateStats(){document.getElementById('stat-likes').textContent = likes.size; document.getElementById('stat-following').textContent=follows.size}
+function renderFollowingBox(){const box=document.getElementById('following-box');const list=document.getElementById('following-list');list.innerHTML=''; if(follows.size===0){box.style.display='none';return} box.style.display=''; follows.forEach(id=>{const div=document.createElement('div');div.className='card';div.innerHTML=`<div class="row" style="justify-content:space-between;align-items:center"><span class="mono tiny">${id}</span><button class="btn ghost" data-id="${id}">Dejar de seguir</button></div>`;div.querySelector('button').onclick=(e)=>{toggleFollow(e.target.dataset.id);renderFollowingBox()};list.appendChild(div)})}
+
+/*************** ROUTER ***************/
+const views = {feed:document.getElementById('view-feed'), explore:document.getElementById('view-explore'), create:document.getElementById('view-create'), profile:document.getElementById('view-profile'), detail:document.getElementById('view-detail')};
+function setActiveNav(id){['nav-feed','nav-explore','nav-create','nav-profile'].forEach(x=>document.getElementById(x).classList.remove('active')); if(id) document.getElementById('nav-'+id).classList.add('active')}
+function showView(name){Object.values(views).forEach(v=>v.style.display='none');views[name].style.display=''}
+window.addEventListener('hashchange',handleRoute);
+async function handleRoute(){const hash=location.hash.replace('#/',''); if(hash.startsWith('restaurant/')){const id=hash.split('/')[1]; await renderDetail(id); setActiveNav(null); showView('detail'); return}
+  switch(hash){
+    case 'explore': setActiveNav('explore'); showView('explore'); await renderExplore(); break;
+    case 'create': setActiveNav('create'); showView('create'); break;
+    case 'profile': setActiveNav('profile'); showView('profile'); renderProfile(); break;
+    case 'feed': default: setActiveNav('feed'); showView('feed'); await loadSummary(3); break;
+  }
+}
+
+/*************** UI STATE ***************/
+function updateAuthUi(){
+  const tokens=getTokens();
+  const chip=document.getElementById('auth-chip');
+  const login=document.getElementById('btn-login');
+  const signup=document.getElementById('btn-signup');
+  const logoutBtn=document.getElementById('btn-logout');
+  const composer=document.getElementById('composer');
+  if(!tokens){
+    chip.textContent='No autenticado';
+    login.style.display='';
+    signup.style.display='';
+    logoutBtn.style.display='none';
+    composer.style.display='none'
+  }else{
+    try{
+      const id=decodeJwt(tokens.id_token);
+      const groups=id['cognito:groups']||[];
+      chip.textContent=`${id.email||'user'} • ${groups[0]||'user'}`;
+      login.style.display='none';
+      signup.style.display='none';
+      logoutBtn.style.display='';
+      composer.style.display=''
+    }catch{
+      chip.textContent='Sesión inválida';
+    }}
+  renderProfileMini()
+}
+
+/*************** FEED ***************/
+let FEED_PAGE=1, FEED_Q='', FEED_SORT='best', FEED_END=false, FEED_LOADING=false;
+const feedEl=document.getElementById('feed');
+async function loadFeed(reset=false){if(FEED_LOADING) return; FEED_LOADING=true; if(reset){FEED_PAGE=1;FEED_END=false;feedEl.innerHTML=''} if(FEED_END){FEED_LOADING=false;return}
+  const list=await fetchRestaurants({search:FEED_Q,sort:FEED_SORT,page:FEED_PAGE,limit:6});
+  if(!list.data || list.data.length===0){ if(FEED_PAGE===1) feedEl.innerHTML = `<div class='empty'>No hay restaurantes aún</div>`; FEED_END=true; FEED_LOADING=false; document.getElementById('feed-more').style.display='none'; return }
+  list.data.forEach(r=>feedEl.appendChild(renderRestaurantCard(r,true)));
+  FEED_PAGE++; document.getElementById('feed-more').style.display=''; FEED_LOADING=false;
+}
+function renderRestaurantCard(r,withActions=false){const card=document.createElement('div');card.className='card feed-card';const avatar = getAvatarUrlFor(r.owner_email || ''); const liked=likes.has(`r:${r.id}`); const following=follows.has(r.id);
+  card.innerHTML = `
+    <img class="avatar" src="${avatar}" alt="avatar"/>
+    <div>
+      <div class="feed-head">
+        <strong>${r.name}</strong>
+        <span class="pill tiny">⭐ ${(r.avg_rating_all?.toFixed?.(1)) ?? 'N/A'}</span>
+        <span class="tiny muted">${r.reviews_count_all||0} reseñas</span>
+      </div>
+      <div class="muted" style="margin:6px 0">${r.description||''}</div>
+      <div class="actions">
+        <button class="btn ghost" data-id="${r.id}" data-action="open">Abrir</button>
+        ${withActions?`<button class="btn ${liked?'':'ghost'}" data-id="${r.id}" data-action="like">${liked?'♥':'♡'} Like</button>`:''}
+        ${withActions?`<button class="btn ${following?'':'ghost'}" data-id="${r.id}" data-action="follow">${following?'Siguiendo':'Seguir'}</button>`:''}
+      </div>
+    </div>`;
+  card.querySelectorAll('button').forEach(b=>b.onclick=(e)=>{const id=e.currentTarget.dataset.id;const action=e.currentTarget.dataset.action;if(action==='open') location.hash = `#/restaurant/${id}`; if(action==='like'){toggleLike(`r:${id}`); e.currentTarget.classList.toggle('ghost'); e.currentTarget.textContent = e.currentTarget.classList.contains('ghost')? '♡ Like' : '♥ Like';} if(action==='follow'){toggleFollow(id); e.currentTarget.classList.toggle('ghost'); e.currentTarget.textContent = e.currentTarget.classList.contains('ghost')? 'Seguir' : 'Siguiendo';}});
+  return card;
+}
+
+/*************** SUMMARY (GET /summary) ***************/
+async function fetchSummary(topN=3){
+  const u = new URL(API_BASE + '/summary');
+  u.searchParams.set('top_n', String(topN || 3));
+  const r = await fetch(u);
+  const j = await r.json();
+  if(!r.ok){ throw new Error('Error summary'); }
+  return j;
+}
+
+function percent(part, total){ const t = Math.max(1, total||0); return Math.max(0, Math.min(100, Math.round((part/t)*100))); }
+
+function renderSummary(s, topN){
+  const box = document.getElementById('summary-card');
+  if(!box){ return; }
+  if(!s){ box.style.display='none'; return; }
+
+  const kpis = `
+    <div class="row" style="gap:12px;flex-wrap:wrap">
+      <div class="kpi"><span class="tiny muted">Restaurantes</span><strong>${s.totals?.restaurants ?? 0}</strong></div>
+      <div class="kpi"><span class="tiny muted">Reseñas</span><strong>${s.totals?.reviews ?? 0}</strong></div>
+      <div class="kpi"><span class="tiny muted">⭐ Promedio</span><strong>${
+        (typeof s.totals?.avg_rating_overall==='number' ? s.totals.avg_rating_overall.toFixed(2) : 'N/A')
+      }</strong></div>
+      <div class="kpi"><span class="tiny muted">Últimos 7d</span><strong>${s.recent_activity?.reviews_last_7d ?? 0}</strong></div>
+    </div>`;
+
+  const top = (s.top_restaurants_by_reviews||[]).slice(0, topN).map(t => `
+    <div class="row" style="justify-content:space-between">
+      <div><strong>${t.restaurant_name||'(sin nombre)'}</strong> <span class="tiny muted">(${t.city||'-'} • ${t.cuisine||'-'})</span></div>
+      <div class="tiny">⭐ ${t.avg_rating ?? 'N/A'} · ${t.reviews} reseñas</div>
+    </div>
+  `).join('');
+
+  const cities = s.distribution?.cities || [];
+  const maxCity = Math.max(1, ...cities.map(c=>c.count||0));
+  const cityBars = cities.map(c=>`
+    <div class="bar-row">
+      <span class="tiny" style="width:120px">${c.city||'(s/d)'}</span>
+      <div class="bar"><span style="width:${percent(c.count||0, maxCity)}%"></span></div>
+      <span class="tiny mono" style="width:32px;text-align:right">${c.count||0}</span>
+    </div>`).join('');
+
+  const cuisines = s.distribution?.cuisines || [];
+  const maxCuisine = Math.max(1, ...cuisines.map(c=>c.count||0));
+  const cuisineBars = cuisines.map(c=>`
+    <div class="bar-row">
+      <span class="tiny" style="width:120px">${c.cuisine||'(s/d)'}</span>
+      <div class="bar"><span style="width:${percent(c.count||0, maxCuisine)}%"></span></div>
+      <span class="tiny mono" style="width:32px;text-align:right">${c.count||0}</span>
+    </div>`).join('');
+
+  const hist = s.rating_histogram || {};
+  const histMax = Math.max(1, ...[1,2,3,4,5].map(i => Number(hist[String(i)]||0)));
+  const histBars = [1,2,3,4,5].map(i=>{
+    const v = Number(hist[String(i)]||0);
+    return `
+      <div class="bar-row">
+        <span class="tiny" style="width:120px">⭐ ${i}</span>
+        <div class="bar"><span style="width:${percent(v, histMax)}%"></span></div>
+        <span class="tiny mono" style="width:32px;text-align:right">${v}</span>
+      </div>`;
+  }).join('');
+
+  box.innerHTML = `
+    <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:8px">
+      <h3 style="margin:0">Resumen</h3>
+      <div class="row" style="gap:6px;align-items:center">
+        <span class="tiny muted">Top N:</span>
+        <select id="summary-topn" style="width:auto">
+          <option value="3" ${topN==3?'selected':''}>3</option>
+          <option value="5" ${topN==5?'selected':''}>5</option>
+          <option value="10" ${topN==10?'selected':''}>10</option>
+        </select>
+      </div>
+    </div>
+    ${kpis}
+    <div class="sep"></div>
+    <div class="summary-grid">
+      <div>
+        <div class="tiny muted" style="margin-bottom:6px">Top ${topN} por reseñas</div>
+        <div class="col">${top || '<div class="empty">Sin datos</div>'}</div>
+      </div>
+      <div>
+        <div class="tiny muted" style="margin-bottom:6px">Histograma de ratings</div>
+        <div class="col">${histBars}</div>
+      </div>
+    </div>
+    <div class="sep"></div>
+    <div class="summary-grid">
+      <div>
+        <div class="tiny muted" style="margin-bottom:6px">Por ciudad</div>
+        <div class="col">${cityBars || '<div class="empty">Sin datos</div>'}</div>
+      </div>
+      <div>
+        <div class="tiny muted" style="margin-bottom:6px">Por cocina</div>
+        <div class="col">${cuisineBars || '<div class="empty">Sin datos</div>'}</div>
+      </div>
+    </div>
+    <div class="tiny muted" style="margin-top:8px">Actualizado: ${new Date(s.generated_at || Date.now()).toLocaleString()}</div>
+  `;
+  box.style.display='';
+
+  // Cambiar N en caliente
+  const sel = box.querySelector('#summary-topn');
+  sel.onchange = async () => {
+    const n = parseInt(sel.value,10) || 3;
+    const data = await fetchSummary(n);
+    renderSummary(data, n);
+  };
+}
+
+async function loadSummary(defaultN=3){
+  const box = document.getElementById('summary-card');
+  if(!box) return;
+  try{
+    const s = await fetchSummary(defaultN);
+    renderSummary(s, defaultN);
+  }catch(e){
+    console.error('Summary error', e);
+    box.innerHTML = `<div class="tiny muted">No se pudo cargar el resumen</div>`;
+    box.style.display='';
+  }
+}
+
+
+/*************** EXPLORE ***************/
+async function renderExplore(){if(!map){initExploreMap()} const data=await fetchRestaurants({search:FEED_Q,sort:FEED_SORT,page:1,limit:50}); const list=document.getElementById('explore-list'); list.innerHTML=''; data.data.forEach(r=>{const m=L.marker([r.location?.lat||0,r.location?.lng||0]).addTo(map); m.bindPopup(`<b>${r.name}</b><br/>⭐ ${(r.avg_rating_all?.toFixed?.(1))??'N/A'}`); list.appendChild(renderRestaurantCard(r,false))})}
+
+/*************** DETAIL ***************/
+const detailEl=document.getElementById('view-detail');
+async function renderDetail(id){detailEl.innerHTML = `<div class='card'>Cargando…</div>`; const r=await fetchRestaurant(id); const liked=likes.has(`r:${id}`); const following=follows.has(id);
+  const head = `
+    <div class="card">
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <div class="col">
+          <h2 style="margin:0">${r.name}</h2>
+          <div class="row">
+            <span class="pill tiny">⭐ ${(r.avg_rating_all?.toFixed?.(1)) ?? 'N/A'}</span>
+            <span class="pill tiny">${r.reviews_count_all||0} reseñas</span>
+          </div>
+          <div class="muted" style="margin-top:6px">${r.description||''}</div>
+        </div>
+        <div class="row">
+          <button id="d-like" class="btn ${liked?'':'ghost'}">${liked?'♥':'♡'} Like</button>
+          <button id="d-follow" class="btn ${following?'':'ghost'}">${following?'Siguiendo':'Seguir'}</button>
+          <a class="btn ghost" href="#/feed">Volver</a>
+        </div>
+      </div>
+    </div>`;
+  const mapBox = `<div class="card"><div id="detail-map" class="map-box"></div></div>`;
+  const reviewsBox = `<div class="card" id="reviews-card"><h3>Reseñas</h3><div id="reviews"></div></div>`;
+  const composerBox = getTokens()? `<div class="card" id="rev-compose">
+      <h4>Escribe una reseña</h4>
+      <input id="rev-title" placeholder="Título"/>
+      <textarea id="rev-comment" placeholder="Comentario" style="height:80px"></textarea>
+      <div class="row">
+        <input id="rev-rating" type="number" min="1" max="5" placeholder="Calificación (1-5)">
+        <input id="rev-images" type="file" accept="image/*" multiple>
+      </div>
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <div class="tiny muted">Puedes subir varias imágenes.</div>
+        <button id="btn-submit-review" class="btn">Publicar reseña</button>
+      </div>
+    </div>` : '';
+  detailEl.innerHTML = head + mapBox + reviewsBox + composerBox;
+
+  // actions
+  document.getElementById('d-like').onclick=()=>{toggleLike(`r:${id}`); document.getElementById('d-like').classList.toggle('ghost'); document.getElementById('d-like').textContent = document.getElementById('d-like').classList.contains('ghost')? '♡ Like' : '♥ Like'};
+  document.getElementById('d-follow').onclick=()=>{toggleFollow(id); document.getElementById('d-follow').classList.toggle('ghost'); document.getElementById('d-follow').textContent = document.getElementById('d-follow').classList.contains('ghost')? 'Seguir' : 'Siguiendo'};
+
+  // map
+  const dm=L.map('detail-map').setView([r.location?.lat||0,r.location?.lng||0],15); L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'&copy; OpenStreetMap'}).addTo(dm); L.marker([r.location?.lat||0,r.location?.lng||0]).addTo(dm);
+
+  // reviews
+  const revs = await fetchReviews(id);
+  renderReviews(revs);
+  if(getTokens()) document.getElementById('btn-submit-review').onclick=()=>submitReview(id);
+}
+function renderReviews(list){const box=document.getElementById('reviews'); box.innerHTML=''; if(!Array.isArray(list)||list.length===0){box.innerHTML=`<div class='empty'>Sin reseñas aún.</div>`; return} list.forEach(rv=>{const liked=likes.has(`v:${rv.id||rv._id||rv.created_at}`); const card=document.createElement('div'); card.className='card'; card.innerHTML=`
+    <div class='row' style='justify-content:space-between;align-items:center'>
+      <div><strong>${rv.title||'(sin título)'}</strong> — ⭐ ${rv.rating}</div>
+      <button class='btn ${liked?'':'ghost'}' data-key="${rv.id||rv._id||rv.created_at}">${liked?'♥':'♡'} Like</button>
+    </div>
+    <div>${rv.comment||''}</div>
+    ${(Array.isArray(rv.images)&&rv.images.length)?`<div class='row' style='margin-top:6px'>${rv.images.map(i=>`<img src='${i}' style='max-height:80px;border-radius:6px'>`).join('')}</div>`:''}
+    <div class='tiny muted' style='margin-top:6px'>${new Date(rv.created_at).toLocaleString()}</div>`; card.querySelector('button').onclick=(e)=>{const k=`v:${e.currentTarget.dataset.key}`;toggleLike(k); e.currentTarget.classList.toggle('ghost'); e.currentTarget.textContent = e.currentTarget.classList.contains('ghost')? '♡ Like' : '♥ Like'}; box.appendChild(card)})}
+async function submitReview(restId){const title=document.getElementById('rev-title').value; const comment=document.getElementById('rev-comment').value; const rating=parseInt(document.getElementById('rev-rating').value); if(!rating||rating<1||rating>5){alert('Pon calificación 1–5');return} const files=document.getElementById('rev-images').files; const imgs=[]; for(const f of files){const url=await uploadImage(f,'reviews'); imgs.push(url)} try{const rv=await createReview(restId,{title,comment,rating,images:imgs}); cacheMine(LS.MY_REVIEWS,rv); alert('✅ Reseña creada'); const revs=await fetchReviews(restId); renderReviews(revs) }catch(e){console.error(e);alert('❌ Error creando reseña')}}
+
+/*************** PROFILE ***************/
+function getAvatarUrl(){return localStorage.getItem(LS.AVATAR) || 'https://www.gravatar.com/avatar/?d=identicon'}
+function setAvatarUrl(url){localStorage.setItem(LS.AVATAR,url)}
+function getAvatarUrlFor(email){ if(!email) return 'https://www.gravatar.com/avatar/?d=identicon'; const md5=(s)=>{return Array.from(new Uint8Array(crypto.subtle.digestSync?crypto.subtle.digestSync('MD5',new TextEncoder().encode(s)):(()=>{throw new Error('No sync MD5')})())).map(b=>b.toString(16).padStart(2,'0')).join('')}; try{ /* browsers no MD5 sync, fallback */ return `https://www.gravatar.com/avatar/?d=identicon` }catch{ return `https://www.gravatar.com/avatar/?d=identicon` }}
+function cacheMine(key,item){const arr=JSON.parse(localStorage.getItem(key)||'[]'); arr.unshift(item); localStorage.setItem(key,JSON.stringify(arr.slice(0,50)))}
+function renderProfile(){const tokens=getTokens(); 
+  const me=document.getElementById('me-avatar'); 
+  const emailEl=document.getElementById('user-email'); 
+  const subEl=document.getElementById('user-sub'); 
+  const roleChip=document.getElementById('role-chip'); 
+  me.src=getAvatarUrl(); 
+
+  if(!tokens){
+    emailEl.textContent='(no autenticado)'; 
+    subEl.textContent=''; 
+    roleChip.textContent='guest'; 
+    updateStats(); 
+    document.getElementById('my-content').innerHTML = `<div class='empty'>Inicia sesión para ver tu contenido.</div>`; 
+    return 
+  } try{
+    const id=decodeJwt(tokens.id_token); 
+    emailEl.textContent=id.email||'(sin email)'; 
+    subEl.textContent=id.sub; 
+    roleChip.textContent=(id['cognito:groups']||['user'])[0]; 
+    updateStats(); 
+    renderMyContent() 
+  }catch{ emailEl.textContent='error token'; subEl.textContent='' }}
+
+function renderProfileMini(){const img=document.getElementById('me-avatar'); if(img) img.src=getAvatarUrl()}
+function renderMyContent(){const box=document.getElementById('my-content'); const myRests=JSON.parse(localStorage.getItem(LS.MY_RESTS)||'[]'); const myRevs=JSON.parse(localStorage.getItem(LS.MY_REVIEWS)||'[]'); box.innerHTML=''; const s1=document.createElement('div'); s1.className='card'; s1.innerHTML='<h3>Mis restaurantes (esta sesión)</h3>'; if(myRests.length===0) s1.innerHTML += `<div class='empty'>Aún no publicas restaurantes.</div>`; else myRests.forEach(r=>s1.appendChild(renderRestaurantCard(r,false))); box.appendChild(s1); const s2=document.createElement('div'); s2.className='card'; s2.innerHTML='<h3>Mis reseñas (esta sesión)</h3>'; if(myRevs.length===0) s2.innerHTML += `<div class='empty'>Aún no has escrito reseñas.</div>`; else myRevs.forEach(rv=>{const c=document.createElement('div'); c.className='card'; c.innerHTML=`<strong>${rv.title||'(sin título)'}</strong> — ⭐ ${rv.rating}<div>${rv.comment||''}</div>`; s2.appendChild(c)}); box.appendChild(s2)}
+
+/*************** EVENT HANDLERS ***************/
+// Recomendaciones: botón que usa el user_sub del perfil
+document.getElementById('btn-recommend').onclick = async () => {
+  const status = document.getElementById('rec-status');
+  const list   = document.getElementById('rec-list');
+  const k      = parseInt(document.getElementById('rec-k').value, 10) || 3;
+
+  // Tomar el sub desde el DOM (lo llena tu flujo de login en Profile)
+  const userSub = (document.getElementById('user-sub')?.textContent || '').trim();
+
+  if (!userSub) {
+    alert('Inicia sesión para obtener recomendaciones.');
+    return;
+  }
+
+  status.textContent = '⏳ Consultando recomendaciones…';
+  list.innerHTML = '';
+
+  try {
+    const data = await fetchRecommendationsByUser(userSub, k);
+    renderRecommendations(data);
+  } catch (e) {
+    console.error(e);
+    status.textContent = '❌ No se pudo obtener recomendaciones';
+    list.innerHTML = `<div class="empty">Intenta más tarde.</div>`;
+  }
+};
+
+document.getElementById('btn-login').onclick=()=>startLogin(false);
+document.getElementById('btn-signup').onclick=(e)=>{e.preventDefault();startLogin(true)};
+document.getElementById('btn-logout').onclick=logout;
+
+// Left search
+ document.getElementById('btn-search').onclick=()=>{FEED_Q=document.getElementById('q').value.trim(); FEED_SORT=document.getElementById('sort').value; loadFeed(true)};
+ document.getElementById('btn-more').onclick=()=>loadFeed(false);
+
+// Quick composer
+document.getElementById('btn-quick-create').onclick = async () => {
+  const name = document.getElementById('c-name').value.trim();
+  const description = document.getElementById('c-desc').value.trim();
+  const city = (document.getElementById('c-city').value || '').trim();
+  const cuisine = (document.getElementById('c-cuisine').value || '').trim();
+  const lat = parseFloat(document.getElementById('c-lat').value);
+  const lng = parseFloat(document.getElementById('c-lng').value);
+  const st = document.getElementById('composer-status');
+
+  if(!getTokens()) return alert('Inicia sesión');
+  if(!name || !description) return alert('Completa nombre y descripción');
+  if(!city) return alert('Ingresa la ciudad');
+  if(!cuisine) return alert('Selecciona la cocina');
+  if(isNaN(lat) || isNaN(lng)) return alert('Marca ubicación en el mapa');
+
+  st.textContent = '⏳ Publicando…';
+  try {
+    const data = await createRestaurant({
+      name,
+      description,
+      city,
+      cuisine,
+      location: { lat, lng }
+    });
+    cacheMine(LS.MY_RESTS, data);
+    st.textContent = '✅ Publicado';
+    document.getElementById('c-name').value = '';
+    document.getElementById('c-desc').value = '';
+    document.getElementById('c-city').value = '';
+    document.getElementById('c-cuisine').value = 'colombiana';
+    document.getElementById('c-lat').value = '';
+    document.getElementById('c-lng').value = '';
+    loadFeed(true);
+  } catch (e) {
+    console.error(e);
+    st.textContent = '❌ Error al publicar';
+  }
+};
+
+
+// Full create
+ document.getElementById('btn-upload').onclick=async()=>{const file=document.getElementById('file-input').files[0];const statusEl=document.getElementById('rest-create-status');const prev=document.getElementById('preview'); if(!file) return alert('Selecciona un archivo'); try{statusEl.textContent='⏳ Subiendo…'; const url=await uploadImage(file,'restaurants'); prev.src=url; prev.style.display='block'; statusEl.textContent='✅ Portada subida'}catch(e){console.error(e);statusEl.textContent='❌ Error subiendo'}}
+document.getElementById('btn-create-restaurant').onclick = async () => {
+  const name = document.getElementById('rest-name').value.trim();
+  const description = document.getElementById('rest-desc').value.trim();
+  const city = (document.getElementById('city').value || '').trim();
+  const cuisine = (document.getElementById('cuisine').value || '').trim();
+  const lat = parseFloat(document.getElementById('lat').value);
+  const lng = parseFloat(document.getElementById('lng').value);
+  const status = document.getElementById('rest-create-status');
+
+  if(!getTokens()) return alert('Inicia sesión');
+  if(!name || !description) return alert('Completa nombre y descripción');
+  if(!city) return alert('Ingresa la ciudad');
+  if(!cuisine) return alert('Selecciona la cocina');
+  if(isNaN(lat) || isNaN(lng)) return alert('Selecciona ubicación');
+
+  status.textContent = '⏳ Creando…';
+  try {
+    const data = await createRestaurant({
+      name,
+      description,
+      city,
+      cuisine,
+      location: { lat, lng }
+    });
+    cacheMine(LS.MY_RESTS, data);
+    status.textContent = '✅ Creado';
+    document.getElementById('rest-name').value = '';
+    document.getElementById('rest-desc').value = '';
+    document.getElementById('city').value = '';
+    document.getElementById('cuisine').value = 'colombiana';
+    document.getElementById('lat').value = '';
+    document.getElementById('lng').value = '';
+    loadFeed(true);
+  } catch (e) {
+    console.error(e);
+    status.textContent = '❌ Error creando';
+  }
+};
+
+
+// Profile avatar change
+ document.getElementById('btn-set-avatar').onclick=()=>document.getElementById('avatar-file').click();
+ document.getElementById('avatar-file').onchange=async (e)=>{const f=e.target.files[0]; if(!f) return; try{const url=await uploadImage(f,'avatars'); setAvatarUrl(url); renderProfile(); updateAuthUi()}catch(err){alert('No se pudo subir avatar')}}
+
+/*************** BOOT ***************/
+(async()=>{if(await handleCallbackIfAny()){} updateAuthUi(); initMiniMap(); initCreateMap(); handleRoute(); await loadSummary(3); await loadFeed(true); renderFollowingBox(); })();
+</script>
+</body>
+</html>
