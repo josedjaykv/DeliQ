@@ -82,7 +82,7 @@
       <a href="#/explore" id="nav-explore">Explorar mapa</a>
       <a href="#/create" id="nav-create">Crear</a>
       <a href="#/profile" id="nav-profile">Perfil</a>
-      <button id="btn-login" class="btn" style="display:none">Iniciar sesión</button>
+      <button id="btn-login" class="btn" style="display:none">Ingresar</button>
       <a id="btn-signup" class="btn secondary" href="#" style="display:none">Crear cuenta</a>
       <button id="btn-logout" class="btn ghost" style="display:none">Salir</button>
     </nav>
@@ -156,7 +156,7 @@
     <section class="col">
       <!-- FEED VIEW -->
       <div id="view-feed" class="col">
-        <div id="summary-card" class="card" style="display:none"></div>
+
         <!-- RECOMMENDATIONS CARD -->
         <div id="recommend-card" class="card">
           <div class="row" style="justify-content:space-between;align-items:center">
@@ -298,6 +298,16 @@ async function sha256Base64Url(str){const data=strToUint8(str);const digest=awai
 function decodeJwt(token){const [,payload]=token.split(".");const json=atob(payload.replace(/-/g,"+").replace(/_/g,"/"));return JSON.parse(decodeURIComponent(escape(json)))}
 function authHeader(){const t=getTokens();return t?.access_token?{"Authorization":`Bearer ${t.access_token}`}:{}}
 function getTokens(){const v=localStorage.getItem(LS.TOKENS);return v?JSON.parse(v):null}
+function getCurrentUserSub(){
+  const tokens = getTokens();
+  if(!tokens?.id_token) return null;
+  try {
+    const id = decodeJwt(tokens.id_token);
+    return id?.sub || null;
+  } catch {
+    return null;
+  }
+}
 function saveTokens(t){localStorage.setItem(LS.TOKENS,JSON.stringify(t))}
 function clearTokens(){localStorage.removeItem(LS.TOKENS)}
 function clearOauthTemp(){localStorage.removeItem(LS.CODE_VERIFIER);localStorage.removeItem(LS.STATE)}
@@ -318,7 +328,15 @@ function buildAuthorizeUrl({state,codeChallenge}){
   return u.toString();
 }
 function buildSignupUrl(authUrl){return authUrl.replace("/authorize","/signup")}
-async function startLogin(signup=false){const state=randString(24);const codeVerifier=randString(64);const codeChallenge=await sha256Base64Url(codeVerifier);localStorage.setItem(LS.STATE,state);localStorage.setItem(LS.CODE_VERIFIER,codeVerifier);const authUrl=buildAuthorizeUrl({state,codeChallenge});window.location.href= signup?buildSignupUrl(authUrl):authUrl}
+async function startLogin(signup=false){
+  const state=randString(24);
+  const codeVerifier=randString(64);
+  const codeChallenge=await sha256Base64Url(codeVerifier);
+  localStorage.setItem(LS.STATE,state);
+  localStorage.setItem(LS.CODE_VERIFIER,codeVerifier);
+  const authUrl=buildAuthorizeUrl({state,codeChallenge});
+  window.location.href= signup?buildSignupUrl(authUrl):authUrl
+}
 async function handleCallbackIfAny(){const url=new URL(window.location.href);const code=url.searchParams.get("code");const state=url.searchParams.get("state");if(!code) return false;const expected=localStorage.getItem(LS.STATE);if(!state||state!==expected){alert("⚠️ State inválido.");return true}const tokenUrl=`https://${COGNITO.userPoolDomain}/oauth2/token`;const body=new URLSearchParams({grant_type:"authorization_code",client_id:COGNITO.clientId,redirect_uri:COGNITO.redirectUri,code_verifier:localStorage.getItem(LS.CODE_VERIFIER),code});const resp=await fetch(tokenUrl,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:body.toString()});if(!resp.ok){console.error("Token exchange failed",await resp.text());alert("No se pudo canjear el código.");return true}const tokens=await resp.json();saveTokens({...tokens,obtained_at:Date.now()});clearOauthTemp();url.searchParams.delete("code");url.searchParams.delete("state");history.replaceState({},document.title,url.pathname);return true}
 async function logout(){clearTokens();clearOauthTemp();const u=new URL(`https://${COGNITO.userPoolDomain}/logout`);u.searchParams.set("client_id",COGNITO.clientId);u.searchParams.set("logout_uri",COGNITO.logoutUri);window.location.href=u.toString()}
 
@@ -436,12 +454,15 @@ function updateAuthUi(){
   const signup=document.getElementById('btn-signup');
   const logoutBtn=document.getElementById('btn-logout');
   const composer=document.getElementById('composer');
+  const subEl = document.getElementById('user-sub');
+
   if(!tokens){
     chip.textContent='No autenticado';
     login.style.display='';
     signup.style.display='';
     logoutBtn.style.display='none';
-    composer.style.display='none'
+    composer.style.display='none';
+    if (subEl) subEl.textContent = '';
   }else{
     try{
       const id=decodeJwt(tokens.id_token);
@@ -450,9 +471,11 @@ function updateAuthUi(){
       login.style.display='none';
       signup.style.display='none';
       logoutBtn.style.display='';
-      composer.style.display=''
+      composer.style.display='';
+      if (subEl) subEl.textContent = id.sub;
     }catch{
       chip.textContent='Sesión inválida';
+      if (subEl) subEl.textContent = ''
     }}
   renderProfileMini()
 }
@@ -713,8 +736,8 @@ document.getElementById('btn-recommend').onclick = async () => {
   const list   = document.getElementById('rec-list');
   const k      = parseInt(document.getElementById('rec-k').value, 10) || 3;
 
-  // Tomar el sub desde el DOM (lo llena tu flujo de login en Profile)
-  const userSub = (document.getElementById('user-sub')?.textContent || '').trim();
+  // Tomar el sub directamente del ID token
+  const userSub = getCurrentUserSub();
 
   if (!userSub) {
     alert('Inicia sesión para obtener recomendaciones.');
@@ -735,7 +758,7 @@ document.getElementById('btn-recommend').onclick = async () => {
 };
 
 document.getElementById('btn-login').onclick=()=>startLogin(false);
-document.getElementById('btn-signup').onclick=(e)=>{e.preventDefault();startLogin(true)};
+document.getElementById('btn-signup').onclick=()=>startLogin(false);
 document.getElementById('btn-logout').onclick=logout;
 
 // Left search
