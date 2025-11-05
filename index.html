@@ -7,6 +7,87 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
+    /* Widget flotante del agente */
+    #agent-widget{
+      position: fixed;
+      right: 18px; bottom: 18px;
+      z-index: 9999;
+    }
+
+    #agent-fab{
+      width: 56px; height: 56px; border-radius: 999px;
+      background: var(--brand); color: #fff; border: none; cursor: pointer;
+      display: grid; place-items: center;
+      box-shadow: 0 10px 30px rgba(0,0,0,.35);
+      transition: transform .15s ease, box-shadow .2s ease;
+    }
+    #agent-fab:hover{ transform: translateY(-1px); box-shadow: 0 12px 34px rgba(0,0,0,.45) }
+
+    #agent-panel{
+      position: absolute; right: 0; bottom: 70px;
+      width: min(92vw, 360px);
+      background: var(--panel); color: var(--txt);
+      border: 1px solid var(--line); border-radius: 16px;
+      box-shadow: 0 18px 55px rgba(0,0,0,.45);
+      overflow: hidden;
+      animation: agentPop .15s ease;
+    }
+    #agent-panel.hidden{ display: none; }
+
+    @keyframes agentPop { from{ transform: translateY(8px); opacity: .0 } to{ transform:none; opacity:1 } }
+
+    .agent-head{
+      display:flex; align-items:center; justify-content:space-between;
+      padding: 10px 12px; background: var(--panel-2); border-bottom:1px solid var(--line)
+    }
+    .agent-head .title{ font-weight:700; font-size:14px }
+    #agent-close{
+      background: transparent; border: 1px solid var(--line); color: var(--txt);
+      border-radius: 10px; padding: 4px 8px; cursor: pointer;
+    }
+
+    .agent-chat{
+      display:flex; flex-direction:column; gap:8px;
+      max-height: 320px; overflow:auto; padding: 10px;
+      background: rgba(255,255,255,0.02);
+    }
+
+    .bubble{
+      max-width:85%; padding:10px 12px; border-radius:14px;
+      line-height:1.35; word-wrap:anywhere;
+      box-shadow:0 6px 16px rgba(0,0,0,.15);
+    }
+    .bubble.bot{ align-self:flex-start; background:var(--panel-2); border:1px solid var(--line) }
+    .bubble.user{ align-self:flex-end; background:var(--brand); color:#fff; border:1px solid transparent }
+
+    .agent-controls{ display:flex; flex-direction:column; gap:8px; padding:10px; border-top:1px solid var(--line) }
+    .agent-controls textarea{ resize: none }
+
+    .chat{
+      display:flex; flex-direction:column; gap:8px;
+      max-height:220px; overflow:auto; padding:8px;
+      background:rgba(255,255,255,0.02);
+      border:1px solid var(--line); border-radius:12px;
+    }
+    .bubble{
+      max-width:85%; padding:10px 12px; border-radius:14px;
+      line-height:1.35;
+      box-shadow:0 6px 16px rgba(0,0,0,.15);
+      word-wrap:anywhere;
+    }
+    .bubble.bot{
+      align-self:flex-start;
+      background:var(--panel);
+      border:1px solid var(--line);
+    }
+    .bubble.user{
+      align-self:flex-end;
+      background:var(--brand);
+      color:#fff;
+      border:1px solid transparent;
+    }
+    .bubble .muted-inline{opacity:.9; font-size:12px}
+
     .summary-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
     @media (max-width: 860px){.summary-grid{grid-template-columns:1fr}}
     .kpi{display:flex;flex-direction:column;gap:2px;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--panel-2)}
@@ -253,6 +334,16 @@
             <div><span class="mono">Siguiendo:</span> <span id="stat-following" class="pill tiny">0</span></div>
           </div>
         </div>
+        <div class="card" id="reports-card">
+          <div class="row" style="justify-content:space-between;align-items:center">
+            <h3 style="margin:0">Reportes (PDF)</h3>
+            <div class="row" style="gap:8px">
+              <button id="btn-build-report" class="btn">Generar reporte (PDF)</button>
+              <a id="btn-download-report" class="btn ghost" href="#" target="_blank" style="display:none">Descargar PDF</a>
+            </div>
+          </div>
+          <div class="tiny muted" id="report-status" style="margin-top:6px">Aún no has generado un reporte en esta sesión.</div>
+        </div>
         <div class="col" id="my-content"></div>
       </div>
 
@@ -268,15 +359,25 @@
 
 <script>
 /**************** CONFIG ****************/
+const N8N = {
+  webhook: "https://josedjaykv.app.n8n.cloud/webhook/chat/review", // usa /webhook en prod
+};
 const COGNITO = {
   region: "us-east-2",
   userPoolDomain: "us-east-2rdqijec2l.auth.us-east-2.amazoncognito.com",
   clientId: "45go98roc58lptsaeejoubj50k",
-  redirectUri: "https://josedjaykv.github.io/DeliQ/",
-  logoutUri:   "https://josedjaykv.github.io/DeliQ/",
+  redirectUri: "http://localhost:3000/",
+  logoutUri:   "http://localhost:3000/",
   scopes: ["openid","email","profile"]
 };
 const API_BASE = "https://01mli3trs0.execute-api.us-east-2.amazonaws.com";
+
+const REPORTS = {
+  PUBLIC: true,                         // <--- cámbialo a true si tu bucket es público
+  BUCKET: "deliq-reports-bucket",        // <--- tu bucket real
+  REGION: "us-east-2"
+};
+
 
 /*************** STORAGE KEYS ***************/
 const LS = {
@@ -291,6 +392,23 @@ const LS = {
 };
 
 /*************** UTIL ***************/
+
+function s3PdfKey(ownerSub, jobId){
+  return `reports/${ownerSub}/${jobId}.pdf`;
+}
+function s3PdfUrl(ownerSub, jobId){
+  // URL HTTP “virtual hosted-style”
+  return `https://${REPORTS.BUCKET}.s3.${REPORTS.REGION}.amazonaws.com/${s3PdfKey(ownerSub, jobId)}`;
+}
+async function headExists(url){
+  // Verifica si el PDF ya existe (sólo funciona si el bucket/objeto es público)
+  try {
+    const r = await fetch(url, { method: "HEAD" });
+    return r.ok;
+  } catch { return false; }
+}
+
+
 function b64url(buf){return btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}
 function strToUint8(str){return new TextEncoder().encode(str)}
 function randString(len=64){const chars="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";let s="";const arr=new Uint32Array(len);crypto.getRandomValues(arr);for(let i=0;i<len;i++) s+=chars[arr[i]%chars.length];return s}
@@ -298,6 +416,153 @@ async function sha256Base64Url(str){const data=strToUint8(str);const digest=awai
 function decodeJwt(token){const [,payload]=token.split(".");const json=atob(payload.replace(/-/g,"+").replace(/_/g,"/"));return JSON.parse(decodeURIComponent(escape(json)))}
 function authHeader(){const t=getTokens();return t?.access_token?{"Authorization":`Bearer ${t.access_token}`}:{}}
 function getTokens(){const v=localStorage.getItem(LS.TOKENS);return v?JSON.parse(v):null}
+function unwrapApi(j) {
+  // soporta tanto {success:true, data:{...}} como {...} plano
+  if (j && typeof j === "object") {
+    if ("success" in j && j.success === true && "data" in j && j.data) return j.data;
+    if ("ok" in j && j.ok === true && "data" in j && j.data) return j.data;
+  }
+  return j;
+}
+
+function getIdToken(){
+  const t = getTokens();
+  return t?.id_token || null;
+}
+
+async function sendToN8NReviewAgent(message, city) {
+  const idToken = getIdToken();
+  if (!idToken) throw new Error("NO_ID_TOKEN");
+
+  const res = await fetch(N8N.webhook, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain" },
+    body: JSON.stringify({ message, idToken, city }),
+  });
+
+  let data;
+  const ct = res.headers.get("content-type") || "";
+  if (ct.includes("application/json")) {
+    data = await res.json();
+  } else {
+    data = await res.text();
+  }
+
+  if (!res.ok) {
+    const detail = typeof data === "string" ? data : JSON.stringify(data);
+    throw new Error(`N8N_ERROR: ${res.status} ${detail}`);
+  }
+  return data;
+}
+
+// ====== Chat helpers (Agente) ======
+function agentPushMessage(role, html){
+  const box = document.getElementById('agent-chat');
+  const div = document.createElement('div');
+  div.className = `bubble ${role === 'user' ? 'user' : 'bot'}`;
+  div.innerHTML = html;
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+  return div;
+}
+function agentSetMessage(el, html){
+  if(!el) return;
+  el.innerHTML = html;
+  const box = document.getElementById('agent-chat');
+  box.scrollTop = box.scrollHeight;
+}
+function escapeHtml(s){
+  try {
+    return String(s)
+      .replaceAll('&','&amp;').replaceAll('<','&lt;')
+      .replaceAll('>','&gt;').replaceAll('"','&quot;')
+      .replaceAll("'",'&#039;');
+  } catch { return s; }
+}
+
+// Toggle panel
+function initAgentWidget(){
+  const fab   = document.getElementById('agent-fab');
+  const panel = document.getElementById('agent-panel');
+  const close = document.getElementById('agent-close');
+  const msgEl = document.getElementById('agent-msg');
+  const cityEl= document.getElementById('agent-city');
+  const send  = document.getElementById('btn-agent-send');
+
+  if (!fab || !panel || !close || !msgEl || !cityEl || !send) return; // guard
+
+  function openPanel(){ panel.classList.remove('hidden'); msgEl.focus(); }
+  function closePanel(){ panel.classList.add('hidden'); }
+
+  fab.onclick = openPanel;
+  close.onclick = closePanel;
+
+  document.addEventListener('keydown', (e)=>{
+    if(e.key === 'Escape' && !panel.classList.contains('hidden')) closePanel();
+  });
+
+  msgEl.addEventListener('keydown', (e)=>{
+    if(e.key === 'Enter' && !e.shiftKey){
+      e.preventDefault();
+      send.click();
+    }
+  });
+
+  // Enviar al agente (modo chat)
+  send.onclick = async () => {
+    const msg  = (msgEl.value || '').trim();
+    const city = (cityEl.value || '').trim();
+
+    if (!msg) { alert('Escribe tu mensaje para el agente.'); return; }
+    if (!getIdToken()) { alert('Inicia sesión para usar el agente.'); return; }
+
+    agentPushMessage('user', escapeHtml(msg));
+    msgEl.value = '';
+
+    const loading = agentPushMessage('bot', '⏳ Procesando tu solicitud…');
+
+    try {
+      const resp = await sendToN8NReviewAgent(msg, city || undefined);
+
+      let pretty = '';
+      if (typeof resp === 'string') {
+        pretty = resp;
+      } else if (resp && typeof resp === 'object') {
+        const ok = resp.success ?? resp.ok;
+        const name = resp.restaurant ?? resp.name ?? resp.restaurant_name;
+        const rating = resp.rating ?? resp.stars;
+        const comment = resp.comment ?? resp.message;
+
+        if (ok && (name || rating || comment)) {
+          pretty = `✅ Reseña registrada:<br/>${
+            name ? `<strong>${escapeHtml(name)}</strong><br/>` : ''
+          }${
+            rating ? `⭐ ${escapeHtml(String(rating))}<br/>` : ''
+          }${
+            comment ? `${escapeHtml(String(comment))}<br/>` : ''
+          }`;
+        } else {
+          pretty = `✅ Listo. Respuesta del agente:<br/><span class="tiny muted">${escapeHtml(JSON.stringify(resp))}</span>`;
+        }
+      } else {
+        pretty = '✅ Listo. ¡Tu solicitud fue procesada!';
+      }
+
+      agentSetMessage(loading, pretty);
+    } catch (e) {
+      console.error(e);
+      const txt =
+        String(e.message).includes('NO_ID_TOKEN') ? '⚠️ Debes iniciar sesión para usar el agente.' :
+        String(e.message).includes('CORS')        ? '❌ Bloqueado por CORS. Revisa el webhook de n8n.' :
+                                                    '❌ Error enviando al agente. Revisa consola.';
+      agentSetMessage(loading, txt);
+    }
+  };
+}
+
+document.addEventListener('DOMContentLoaded', initAgentWidget);
+
+
 function getCurrentUserSub(){
   const tokens = getTokens();
   if(!tokens?.id_token) return null;
@@ -730,6 +995,138 @@ function renderProfileMini(){const img=document.getElementById('me-avatar'); if(
 function renderMyContent(){const box=document.getElementById('my-content'); const myRests=JSON.parse(localStorage.getItem(LS.MY_RESTS)||'[]'); const myRevs=JSON.parse(localStorage.getItem(LS.MY_REVIEWS)||'[]'); box.innerHTML=''; const s1=document.createElement('div'); s1.className='card'; s1.innerHTML='<h3>Mis restaurantes (esta sesión)</h3>'; if(myRests.length===0) s1.innerHTML += `<div class='empty'>Aún no publicas restaurantes.</div>`; else myRests.forEach(r=>s1.appendChild(renderRestaurantCard(r,false))); box.appendChild(s1); const s2=document.createElement('div'); s2.className='card'; s2.innerHTML='<h3>Mis reseñas (esta sesión)</h3>'; if(myRevs.length===0) s2.innerHTML += `<div class='empty'>Aún no has escrito reseñas.</div>`; else myRevs.forEach(rv=>{const c=document.createElement('div'); c.className='card'; c.innerHTML=`<strong>${rv.title||'(sin título)'}</strong> — ⭐ ${rv.rating}<div>${rv.comment||''}</div>`; s2.appendChild(c)}); box.appendChild(s2)}
 
 /*************** EVENT HANDLERS ***************/
+// PDF
+async function buildReport() {
+  const tokens = getTokens();
+  if (!tokens?.id_token) {
+    alert("Inicia sesión para generar reportes.");
+    return null;
+  }
+  const status = document.getElementById("report-status");
+  status.textContent = "⏳ Solicitando generación del reporte…";
+
+  const res = await fetch(API_BASE + "/reports/build", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      // usa ID token (es el que suele llevar 'sub' y claims)
+      "Authorization": `Bearer ${tokens.id_token}`
+    },
+    body: JSON.stringify({})
+  });
+
+  let j;
+  try {
+    j = await res.json();
+  } catch {
+    status.textContent = `❌ Respuesta no-JSON (${res.status})`;
+    return null;
+  }
+
+  // Si tu ok() envuelve en { success, data }, esto lo normaliza
+  const out = unwrapApi(j) || {};
+  const jobId = out.job_id || out.jobId || out.payload?.job_id;
+  const ownerSub = out.owner_sub || out.ownerSub || out.payload?.owner_sub;
+
+  if (!res.ok || j.success === false) {
+    status.textContent = `❌ Error solicitando reporte: ${out?.error || res.status}`;
+    console.warn("reports/build response:", j);
+    return null;
+  }
+
+  if (!jobId || !ownerSub) {
+    status.textContent = "❌ Respuesta sin job_id/owner_sub (revisa el formato devuelto por la API).";
+    console.warn("reports/build response (missing fields):", j);
+    return null;
+  }
+
+  status.textContent = `✅ Reporte en cola. Job: ${jobId}. Esperando el PDF…`;
+  return { jobId, ownerSub };
+}
+
+function authIdHeader(){
+  const t = getTokens();
+  return t?.id_token ? { "Authorization": `Bearer ${t.id_token}` } : {};
+}
+
+
+async function waitForPdf({ jobId, ownerSub, timeoutMs = 120000, intervalMs = 3000 }) {
+  // Si tu bucket es público, haremos HEAD directo.
+  // Si es privado (default), este método intentará (si lo implementas) pedir un presigned URL a /reports/url/{job_id}
+  const status = document.getElementById("report-status");
+  const downloadBtn = document.getElementById("btn-download-report");
+
+  const started = Date.now();
+  let lastMsgAt = 0;
+
+  // Presigned URL endpoint opcional (si lo implementas en back):
+  async function tryPresigned() {
+    try {
+      const r = await fetch(API_BASE + `/reports/url/${encodeURIComponent(jobId)}`, {
+        headers: { ...authHeader() }
+      });
+      if (!r.ok) return null;
+      const data = await r.json();
+      // espera { ok:true, url:"https://..." }
+      return data?.url || null;
+    } catch { return null; }
+  }
+
+  while (Date.now() - started < timeoutMs) {
+    if (REPORTS.PUBLIC) {
+      const url = s3PdfUrl(ownerSub, jobId);
+      if (await headExists(url)) {
+        status.textContent = `✅ PDF listo.`;
+        downloadBtn.href = url;
+        downloadBtn.style.display = "";
+        downloadBtn.classList.remove("ghost");
+        return true;
+      }
+    } else {
+      // bucket privado: intenta pedir un presigned URL a tu back si ya lo expusiste
+      const url = await tryPresigned();
+      if (url) {
+        status.textContent = `✅ PDF listo.`;
+        downloadBtn.href = url;
+        downloadBtn.style.display = "";
+        downloadBtn.classList.remove("ghost");
+        return true;
+      }
+    }
+
+    // Mensajito de progreso cada ~10s
+    if (Date.now() - lastMsgAt > 10000) {
+      status.textContent = "⏳ Aún generando…";
+      lastMsgAt = Date.now();
+    }
+    await new Promise(r => setTimeout(r, intervalMs));
+  }
+
+  status.textContent = "⚠️ No se detectó el PDF a tiempo. Intenta de nuevo en unos minutos.";
+  return false;
+}
+
+// Generar PDF desde Perfil
+document.getElementById("btn-build-report").onclick = async () => {
+  const res = await buildReport();
+  if (!res) return;
+  await waitForPdf(res); // hace polling hasta que esté
+};
+
+// Utilidad simple para texto seguro en HTML
+function escapeHtml(s){
+  try{
+    return String(s)
+      .replaceAll('&','&amp;')
+      .replaceAll('<','&lt;')
+      .replaceAll('>','&gt;')
+      .replaceAll('"','&quot;')
+      .replaceAll("'",'&#039;');
+  }catch{ return s; }
+}
+
+
+
 // Recomendaciones: botón que usa el user_sub del perfil
 document.getElementById('btn-recommend').onclick = async () => {
   const status = document.getElementById('rec-status');
@@ -855,5 +1252,37 @@ document.getElementById('btn-create-restaurant').onclick = async () => {
 /*************** BOOT ***************/
 (async()=>{if(await handleCallbackIfAny()){} updateAuthUi(); initMiniMap(); initCreateMap(); handleRoute(); await loadSummary(3); await loadFeed(true); renderFollowingBox(); })();
 </script>
+  <div id="agent-widget">
+    <button id="agent-fab" title="Agente de Reseñas">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+        <path d="M21 15a4 4 0 0 1-4 4H9l-6 4V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4v8Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+      </svg>
+    </button>
+
+    <div id="agent-panel" class="hidden">
+      <div class="agent-head">
+        <div class="title">🤖 Agente de Reseñas</div>
+        <button id="agent-close" aria-label="Cerrar">✕</button>
+      </div>
+
+      <div id="agent-chat" class="agent-chat">
+        <div class="bubble bot">
+          <strong>DeliQ Bot</strong><br/>
+          ¿Qué restaurante quieres calificar hoy? Recuerda darme:
+          <ul style="margin:6px 0 0 16px">
+            <li>El nombre del restaurante</li>
+            <li>Su calificación (de 1 a 5)</li>
+            <li>Un pequeño comentario</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="agent-controls">
+        <input id="agent-city" placeholder="Ciudad (opcional, ej: Medellín)"/>
+        <textarea id="agent-msg" rows="2" placeholder="Escribe tu mensaje…"></textarea>
+        <button id="btn-agent-send" class="btn">Enviar</button>
+      </div>
+    </div>
+  </div>
 </body>
 </html>
